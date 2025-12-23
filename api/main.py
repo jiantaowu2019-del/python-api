@@ -102,17 +102,3 @@ def list_jobs(limit: int = 20):
     items = sorted(JOBS.values(), key=lambda j: j.created_at, reverse=True)
     # 限制一下最大数量，避免一次性返回太多
     return items[: max(1, min(limit, 200))]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
