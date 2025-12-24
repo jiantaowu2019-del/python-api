@@ -1,4 +1,4 @@
-# api/jobs.py
+#api/jobs.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Literal, List, Optional
@@ -42,9 +42,41 @@ def create_job(job_in: JobCreate):
     jobs_db.append(job)
     return job
 
+
+
 @router.get("", response_model=List[Job])
-def list_jobs():
-    return jobs_db
+def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]] = None):
+    """
+    列出所有 Job，或者按状态过滤：
+    - /api/jobs                 -> 返回全部
+    - /api/jobs?status=queued  -> 只返回排队中的
+    """
+    if status is None:
+        return jobs_db
+    return [job for job in jobs_db if job.status == status]
+
+from collections import Counter  # 如果顶部还没有这行，就加上
+
+# ...（上面是 list_jobs）
+
+@router.get("/stats")
+def job_stats():
+    """
+    返回 Job 的整体统计信息：
+    - total: 总数
+    - queued / processing / done / failed: 各状态数量
+    """
+    counts = Counter(job.status for job in jobs_db)
+    return {
+        "total": len(jobs_db),
+        "queued": counts.get("queued", 0),
+        "processing": counts.get("processing", 0),
+        "done": counts.get("done", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+
 
 @router.get("/{job_id}", response_model=Job)
 def get_job(job_id: str):
@@ -64,6 +96,7 @@ def update_job_status(job_id: str, update: JobUpdateStatus):
             job.updated_at = datetime.utcnow()
             return job
     raise HTTPException(status_code=404, detail="Job not found")
+
 
 # ⭐ “执行任务”的接口（同步假装干点活）
 @router.post("/{job_id}/run", response_model=Job)
@@ -95,3 +128,29 @@ def run_job(job_id: str):
             return job
 
     raise HTTPException(status_code=404, detail="Job not found")
+
+
+
+
+
+
+
+
+
+# ... 现在已有的代码保持不动 ...
+
+@router.delete("/{job_id}", response_model=Job)
+def delete_job(job_id: str):
+    """
+    删除一个 Job，并把被删除的 Job 返回给客户端。
+    """
+    for idx, job in enumerate(jobs_db):
+        if job.id == job_id:
+            # 从 "数据库" 列表中移除
+            deleted = jobs_db.pop(idx)
+            return deleted
+    raise HTTPException(status_code=404, detail="Job not found")
+
+
+
+
