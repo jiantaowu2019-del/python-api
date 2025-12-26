@@ -5,6 +5,12 @@ from typing import Literal, List, Optional
 from datetime import datetime
 from uuid import uuid4
 import time
+from collections import Counter  
+
+# add a global locker
+from threading import Lock
+jobs_lock = Lock()
+
 
 # 给这个 router 设定统一前缀 /jobs
 router = APIRouter(
@@ -39,7 +45,9 @@ def create_job(job_in: JobCreate):
         created_at=now,
         updated_at=now,
     )
-    jobs_db.append(job)
+    
+    with jobs_lock:
+        jobs_db.append(job)
     return job
 
 
@@ -51,12 +59,11 @@ def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]
     - /api/jobs                 -> 返回全部
     - /api/jobs?status=queued  -> 只返回排队中的
     """
-    if status is None:
-        return jobs_db
-    return [job for job in jobs_db if job.status == status]
-
-from collections import Counter  # 如果顶部还没有这行，就加上
-
+    with jobs_lock:
+        if status is None: 
+            # 返回一个浅拷贝，避免迭代时被别的线程 append/pop
+            return list(jobs_db)
+        return [job for job in jobs_db if job.status == status]
 # ...（上面是 list_jobs）
 
 @router.get("/stats")
@@ -66,35 +73,38 @@ def job_stats():
     - total: 总数
     - queued / processing / done / failed: 各状态数量
     """
-    counts = Counter(job.status for job in jobs_db)
-    return {
-        "total": len(jobs_db),
-        "queued": counts.get("queued", 0),
-        "processing": counts.get("processing", 0),
-        "done": counts.get("done", 0),
-        "failed": counts.get("failed", 0),
-    }
-
+    with jobs_lock:
+        counts = Counter(job.status for job in jobs_db)
+        return {
+            "total": len(jobs_db),
+            "queued": counts.get("queued", 0),
+            "processing": counts.get("processing", 0),
+            "done": counts.get("done", 0),
+            "failed": counts.get("failed", 0),
+        }
 
 
 
 @router.get("/{job_id}", response_model=Job)
 def get_job(job_id: str):
-    for job in jobs_db:
-        if job.id == job_id:
-            return job
+    with jobs_lock:
+        for job in jobs_db:
+            if job.id == job_id:
+                return job
     raise HTTPException(status_code=404, detail="Job not found")
+
 
 class JobUpdateStatus(BaseModel):
     status: Literal["queued", "processing", "done", "failed"]
 
 @router.patch("/{job_id}/status", response_model=Job)
 def update_job_status(job_id: str, update: JobUpdateStatus):
-    for job in jobs_db:
-        if job.id == job_id:
-            job.status = update.status
-            job.updated_at = datetime.utcnow()
-            return job
+    with jobs_lock:
+        for job in jobs_db:
+            if job.id == job_id:
+                job.status = update.status
+                job.updated_at = datetime.utcnow()
+                return job
     raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -107,26 +117,32 @@ def run_job(job_id: str):
     - 假装工作 1 秒
     - 把状态改成 done，并写入 result
     """
-    for job in jobs_db:
-        if job.id == job_id:
-            if job.status == "processing":
-                raise HTTPException(status_code=400, detail="Job is already processing")
-            if job.status == "done":
-                raise HTTPException(status_code=400, detail="Job is already done")
+    with jobs_lock:
+        for job in jobs_db:
+            if job.id == job_id:
+                target = job
+                break
 
-            # 标记为处理中
-            job.status = "processing"
-            job.updated_at = datetime.utcnow()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+            
+        if target.status == "processing":
+            raise HTTPException(status_code=400, detail="Job is already processing")
+        if target.status == "done":
+             raise HTTPException(status_code=400, detail="Job is already done")
 
-            # 假装做了一些工作
-            time.sleep(1)
+        # 标记为处理中
+        target.status = "processing"
+        target.updated_at = datetime.utcnow()
 
-            # 完成
-            job.status = "done"
-            job.result = f"Job finished with payload: {job.payload}"
-            job.updated_at = datetime.utcnow()
-            return job
+        # 假装做了一些工作，耗费时间
+        time.sleep(1)
 
+         # 完成
+        target.status = "done"
+        target.result = f"Job finished with payload: {target.payload}"
+        target.updated_at = datetime.utcnow()
+        return target
     raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -144,11 +160,12 @@ def delete_job(job_id: str):
     """
     删除一个 Job，并把被删除的 Job 返回给客户端。
     """
-    for idx, job in enumerate(jobs_db):
-        if job.id == job_id:
-            # 从 "数据库" 列表中移除
-            deleted = jobs_db.pop(idx)
-            return deleted
+    with jobs_lock:
+        for idx, job in enumerate(jobs_db):
+            if job.id == job_id:
+                # 从 "数据库" 列表中移除
+                deleted = jobs_db.pop(idx)
+                return deleted
     raise HTTPException(status_code=404, detail="Job not found")
 
 
