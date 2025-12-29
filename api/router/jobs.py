@@ -1,28 +1,42 @@
-#api/jobs.py
+# api/jobs.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Literal, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 import time
-from collections import Counter  
+from collections import Counter
 
-# add a global locker
-from threading import Lock
-jobs_lock = Lock()
+from api.db import get_conn
+from api.queue_state import job_queue  # 如果你决定保留事件驱动 worker
 
 
-# 给这个 router 设定统一前缀 /jobs
-router = APIRouter(
-    prefix="/jobs",
-    tags=["jobs"],
-)
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-# 创建任务时用户需要提供的字段
+
+def row_to_job(row) -> "Job":
+    return Job(
+        id=row["id"],
+        payload=row["payload"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+        result=row["result"],
+        error=row["error"],
+        attempts=row["attempts"],
+        max_retries=row["max_retries"],
+    )
+
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
 class JobCreate(BaseModel):
-    payload: str  # 比如要干什么事情：发邮件、生成报表之类
+    payload: str
+    max_retries: int = 3
 
-# 返回给客户端的任务结构
+
 class Job(BaseModel):
     id: str
     payload: str
@@ -31,143 +45,188 @@ class Job(BaseModel):
     updated_at: datetime
     result: Optional[str] = None
     error: Optional[str] = None
-
-# 用一个简单的 list 模拟数据库
-jobs_db: List[Job] = []
-
-@router.post("", response_model=Job)
-def create_job(job_in: JobCreate):
-    now = datetime.utcnow()
-    job = Job(
-        id=str(uuid4()),
-        payload=job_in.payload,
-        status="queued",
-        created_at=now,
-        updated_at=now,
-    )
-    
-    with jobs_lock:
-        jobs_db.append(job)
-    return job
-
-
-
-@router.get("", response_model=List[Job])
-def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]] = None):
-    """
-    列出所有 Job，或者按状态过滤：
-    - /api/jobs                 -> 返回全部
-    - /api/jobs?status=queued  -> 只返回排队中的
-    """
-    with jobs_lock:
-        if status is None: 
-            # 返回一个浅拷贝，避免迭代时被别的线程 append/pop
-            return list(jobs_db)
-        return [job for job in jobs_db if job.status == status]
-# ...（上面是 list_jobs）
-
-@router.get("/stats")
-def job_stats():
-    """
-    返回 Job 的整体统计信息：
-    - total: 总数
-    - queued / processing / done / failed: 各状态数量
-    """
-    with jobs_lock:
-        counts = Counter(job.status for job in jobs_db)
-        return {
-            "total": len(jobs_db),
-            "queued": counts.get("queued", 0),
-            "processing": counts.get("processing", 0),
-            "done": counts.get("done", 0),
-            "failed": counts.get("failed", 0),
-        }
-
-
-
-@router.get("/{job_id}", response_model=Job)
-def get_job(job_id: str):
-    with jobs_lock:
-        for job in jobs_db:
-            if job.id == job_id:
-                return job
-    raise HTTPException(status_code=404, detail="Job not found")
+    attempts: int = 0
+    max_retries: int = 3
 
 
 class JobUpdateStatus(BaseModel):
     status: Literal["queued", "processing", "done", "failed"]
 
+
+@router.post("", response_model=Job)
+def create_job(job_in: JobCreate):
+    job_id = str(uuid4())
+    now = now_utc_iso()
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO jobs (id, payload, status, created_at, updated_at, result, error, attempts, max_retries)
+            VALUES (?, ?, 'queued', ?, ?, NULL, NULL, 0, ?)
+            """,
+            (job_id, job_in.payload, now, now, job_in.max_retries),
+        )
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    # 通知 worker：有新任务（如果你 worker 还用 Queue 驱动）
+    job_queue.put(job_id)
+
+    return row_to_job(row)
+
+
+@router.get("", response_model=List[Job])
+def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]] = None,
+              limit: int = 50,
+              offset: int = 0,):
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    with get_conn() as conn:
+        if status is None:
+            rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (status, limit, offset),
+            ).fetchall()
+    return [row_to_job(r) for r in rows]
+
+
+@router.get("/stats")
+def job_stats():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT status FROM jobs").fetchall()
+
+    counts = Counter(r["status"] for r in rows)
+    total = len(rows)
+    return {
+        "total": total,
+        "queued": counts.get("queued", 0),
+        "processing": counts.get("processing", 0),
+        "done": counts.get("done", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+@router.get("/count")
+def jobs_count(status: Optional[Literal["queued", "processing", "done", "failed"]] = None):
+    with get_conn() as conn:
+        if status is None:
+            row = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS c FROM jobs WHERE status = ?", (status,)).fetchone()
+    return {"count": row["c"]}
+
+
+@router.get("/{job_id}", response_model=Job)
+def get_job(job_id: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return row_to_job(row)
+
+
 @router.patch("/{job_id}/status", response_model=Job)
 def update_job_status(job_id: str, update: JobUpdateStatus):
-    with jobs_lock:
-        for job in jobs_db:
-            if job.id == job_id:
-                job.status = update.status
-                job.updated_at = datetime.utcnow()
-                return job
-    raise HTTPException(status_code=404, detail="Job not found")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # 建议的保护规则（可选）：processing 时不允许随便改
+        # if row["status"] == "processing" and update.status != "processing":
+        #     raise HTTPException(status_code=409, detail="Cannot change status of a processing job")
+
+        conn.execute(
+            "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+            (update.status, now_utc_iso(), job_id),
+        )
+        new_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    return row_to_job(new_row)
 
 
-# ⭐ “执行任务”的接口（同步假装干点活）
 @router.post("/{job_id}/run", response_model=Job)
 def run_job(job_id: str):
     """
-    简单模拟执行一个 Job：
-    - 把状态改成 processing
-    - 假装工作 1 秒
-    - 把状态改成 done，并写入 result
+    同步执行（演示用）：processing -> sleep(1) -> done
+    注意：如果你已经有后台 worker，生产中一般不保留这个接口。
     """
-    with jobs_lock:
-        for job in jobs_db:
-            if job.id == job_id:
-                target = job
-                break
-
-        if target is None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
             raise HTTPException(status_code=404, detail="Job not found")
-            
-        if target.status == "processing":
+
+        if row["status"] == "processing":
             raise HTTPException(status_code=400, detail="Job is already processing")
-        if target.status == "done":
-             raise HTTPException(status_code=400, detail="Job is already done")
+        if row["status"] == "done":
+            raise HTTPException(status_code=400, detail="Job is already done")
 
-        # 标记为处理中
-        target.status = "processing"
-        target.updated_at = datetime.utcnow()
+        conn.execute(
+            "UPDATE jobs SET status='processing', updated_at=? WHERE id=?",
+            (now_utc_iso(), job_id),
+        )
 
-        # 假装做了一些工作，耗费时间
-        time.sleep(1)
+    time.sleep(1)
 
-         # 完成
-        target.status = "done"
-        target.result = f"Job finished with payload: {target.payload}"
-        target.updated_at = datetime.utcnow()
-        return target
-    raise HTTPException(status_code=404, detail="Job not found")
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='done', result=?, error=NULL, updated_at=?
+            WHERE id=?
+            """,
+            (f"Job finished with payload: {row['payload']}", now_utc_iso(), job_id),
+        )
+        new_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 
+    return row_to_job(new_row)
 
-
-
-
-
-
-
-
-# ... 现在已有的代码保持不动 ...
 
 @router.delete("/{job_id}", response_model=Job)
 def delete_job(job_id: str):
-    """
-    删除一个 Job，并把被删除的 Job 返回给客户端。
-    """
-    with jobs_lock:
-        for idx, job in enumerate(jobs_db):
-            if job.id == job_id:
-                # 从 "数据库" 列表中移除
-                deleted = jobs_db.pop(idx)
-                return deleted
-    raise HTTPException(status_code=404, detail="Job not found")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # 推荐保护规则：processing 不能删
+        if row["status"] == "processing":
+            raise HTTPException(status_code=409, detail="Cannot delete a processing job")
+
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    return row_to_job(row)
 
 
+@router.post("/{job_id}/requeue", response_model=Job)
+def requeue_job(job_id: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if row["status"] == "processing":
+            raise HTTPException(status_code=409, detail="Cannot requeue a processing job")
+
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='queued',
+                result=NULL,
+                error=NULL,
+                updated_at=?
+            WHERE id=?
+            """,
+            (now_utc_iso(), job_id),
+        )
+        new_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    job_queue.put(job_id)
+    return row_to_job(new_row)
 
 
