@@ -1,5 +1,5 @@
 # api/jobs.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Literal, List, Optional
 from datetime import datetime, timezone
@@ -75,13 +75,19 @@ def create_job(job_in: JobCreate):
 
 
 @router.get("", response_model=List[Job])
-def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]] = None,
-              limit: int = 50,
-              offset: int = 0,):
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0")
+def list_jobs(
+    status: Optional[Literal["queued", "processing", "done", "failed"]] = None,
+    limit: int = Query(50, ge=1, le=200, description="Page size (1-200)"),
+    offset: int = Query(0, ge=0, description="Number of items to skip")
+    ):
+
+
+    # this part has replaced by Query parameters with validation ^
+    #                                                            
+    #if limit < 1 or limit > 200:
+        #raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    #if offset < 0:
+        #raise HTTPException(status_code=400, detail="offset must be >= 0")
 
     with get_conn() as conn:
         if status is None:
@@ -91,6 +97,7 @@ def list_jobs(status: Optional[Literal["queued", "processing", "done", "failed"]
                 "SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 (status, limit, offset),
             ).fetchall()
+            
     return [row_to_job(r) for r in rows]
 
 
