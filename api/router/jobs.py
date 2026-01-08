@@ -53,6 +53,14 @@ class JobUpdateStatus(BaseModel):
     status: Literal["queued", "processing", "done", "failed"]
 
 
+class JobPage(BaseModel):
+    items: List[Job]
+    total: int
+    limit: int
+    offset: int
+
+
+
 @router.post("", response_model=Job)
 def create_job(job_in: JobCreate):
     job_id = str(uuid4())
@@ -80,10 +88,8 @@ def list_jobs(
     limit: int = Query(50, ge=1, le=200, description="Page size (1-200)"),
     offset: int = Query(0, ge=0, description="Number of items to skip")
     ):
-
-
-    # this part has replaced by Query parameters with validation ^
-    #                                                            
+    
+    # replaced by Query parameters
     #if limit < 1 or limit > 200:
         #raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
     #if offset < 0:
@@ -97,7 +103,7 @@ def list_jobs(
                 "SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 (status, limit, offset),
             ).fetchall()
-            
+
     return [row_to_job(r) for r in rows]
 
 

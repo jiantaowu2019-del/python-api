@@ -4,28 +4,21 @@ from time import sleep
 from datetime import datetime, timezone
 
 from api.db import get_conn
+from api.redis_client import dequeue_blocking, enqueue
 
 stop_event = Event()
+
 
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def _claim_one_job():
+def _claim_job_by_id(job_id: str):
     """
-    抢占一个 queued job（原子）：
-    1) 选最早 created 的 queued
-    2) UPDATE ... WHERE status='queued' 确保只抢一次
+    原子 claim：
+    - 只有当 status='queued' 才能抢占为 processing
+    - attempts += 1
     """
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT id FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-        if row is None:
-            return None
-
-        job_id = row["id"]
-        updated = now_utc_iso()
-
         cur = conn.execute(
             """
             UPDATE jobs
@@ -34,13 +27,13 @@ def _claim_one_job():
                 updated_at = ?
             WHERE id = ? AND status='queued'
             """,
-            (updated, job_id),
+            (now_utc_iso(), job_id),
         )
-
         if cur.rowcount == 0:
-            return None  # 被别的 worker 抢走了
-
+            return None
         return conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+
 
 def _execute_job_logic(payload: str):
     # 演示失败：payload 含 fail -> 抛异常
@@ -49,30 +42,30 @@ def _execute_job_logic(payload: str):
         raise RuntimeError("Simulated failure (payload contains 'fail')")
     
 
-def worker_loop(poll_interval: float = 0.5):
+def worker_loop():
     while not stop_event.is_set():
-        job = _claim_one_job()
-        if job is None:
-            sleep(poll_interval)
+        job_id = dequeue_blocking(timeout=1)
+        if job_id is None:
             continue
 
-        job_id = job["id"]
+        job = _claim_job_by_id(job_id)
+        if job is None:
+            # 可能是：已被处理/被删/状态不是 queued（重复入队等）
+            continue
+
         payload = job["payload"]
-        attempts = job["attempts"]
-        max_retries = job["max_retries"]
+        attempts = int(job["attempts"])
+        max_retries = int(job["max_retries"])
 
         try:
             _execute_job_logic(payload)
         except Exception as e:
-            with get_conn() as conn:
-                # 这里的语义：max_retries = 允许重试次数
-                # 总尝试上限 = 1 + max_retries
-                # attempts 是已经做过的尝试次数（claim 时 +1）
-                if attempts < 1 + max_retries:
-                    next_status = "queued"
-                else:
-                    next_status = "failed"
+            # max_retries = 允许“重试次数”
+            # 总尝试上限 = 1 + max_retries
+            can_retry = attempts <= (1 + max_retries)
+            next_status = "queued" if can_retry else "failed"
 
+            with get_conn() as conn:
                 conn.execute(
                     """
                     UPDATE jobs
@@ -83,6 +76,10 @@ def worker_loop(poll_interval: float = 0.5):
                     """,
                     (next_status, str(e), now_utc_iso(), job_id),
                 )
+
+            # 还能重试：重新入 Redis 队列
+            if can_retry:
+                enqueue(job_id)
         else:
             with get_conn() as conn:
                 conn.execute(
@@ -96,6 +93,7 @@ def worker_loop(poll_interval: float = 0.5):
                     """,
                     (f"Job finished with payload: {payload}", now_utc_iso(), job_id),
                 )
+
 
 def start_worker():
     t = Thread(target=worker_loop, daemon=True)

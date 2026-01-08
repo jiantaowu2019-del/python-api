@@ -1,12 +1,8 @@
 # api/main.py
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from enum import Enum
-from uuid import uuid4
-from datetime import datetime, timezone
+from fastapi import FastAPI
 from api.router.jobs import router as jobs_router
-from uuid import uuid4
 from api.worker import start_worker
+from api.db import init_db
 
 
 
@@ -15,7 +11,14 @@ app = FastAPI(title="Job Queue API")
 
 @app.on_event("startup")
 def on_startup():
-    # 启动后台 worker 线程
+    #starts worker thread
+    # ensure the table exists and the schema  is up to date
+    init_db()
+
+    #starts a background thread 
+    # the thread will fetch tasks from the job queue 
+    # Update job status (queued->running->done/failed)
+    # !( does not depend on the HTTP request)
     start_worker()
 
 
