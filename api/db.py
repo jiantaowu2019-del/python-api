@@ -3,7 +3,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent / "jobs.db"
+DB_PATH = Path(__file__).resolve().parent / "jobs.db" #create job.db in the same folder 
+
 
 @contextmanager
 def get_conn():
