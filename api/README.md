@@ -1,20 +1,26 @@
 # Background Job Queue and Monitoring System
 
-A Restful background job-processing service build with FastAPI, redis, and SQlite. The application accepts jobs through an HTTP API, places their IDs in a Redis queue, and processing them asynchronously with a background worker thread.
+A RESTful background job-processing service built with FastAPI, Redis,
+and SQLite. The application accepts jobs through an HTTP API, places
+their IDs in a Redis queue, and processes them asynchronously with a
+background worker thread.
 
-The project demonstrates API design, persistent job state, queue-based background processing, retry handling, automated testing, and containerized local development.
+The project demonstrates API design, persistent job state, queue-based
+background processing, retry handling, automated testing, and
+containerized local development.
 
 ## Features
-- submit background jobs through a Rest API
-- Track job status and result
+
+- Submit background jobs through a REST API
+- Track job statuses and results
 - Filter and paginate job records
-- Process queued jobs with a Redis-backed Worker
+- Process queued jobs with a Redis-backed worker
 - Automatically retry failed jobs
-- Manually requeue completed or failed job
-- Prevent invalid duplicated job claims with conditional state transitions
-- View queue statistic and recovery actions through a monitoring dashboard
-- Persis job records in SQLite
-- Run the API and Redis services with Docker compose
+- Manually requeue completed or failed jobs
+- Prevent duplicate job claims with conditional state transitions
+- View queue statistics and recovery actions through a monitoring dashboard
+- Persist job records in SQLite
+- Run the API and Redis services with Docker Compose
 - Test API and database behavior with Pytest
 
 
