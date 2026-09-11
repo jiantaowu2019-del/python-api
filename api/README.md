@@ -31,14 +31,16 @@ A background worker thread blocks on the Redis queue, claims the corresponding S
 
 ```mermaid
 flowchart LR
-  Client[Client or dashboard] -->| HTTP
-  request| API[FastAPI application]
-  API -->|store job record| DB(SQLite) ]
-  API -->|Enqueue job ID| Queue[(Redis queue)]
-  Queue -->|Dequeue job ID| Worker[Background worker thread]
-  Worker -->|Claim and update job| DB
-  API -->|Read job status| DB
+    Client[Client or dashboard] -->| HTTP request| API[FastAPI application]
+    API -->|store job record| DB[(SQLite)]
+    API -->|Enqueue job ID| Queue[(Redis queue)]
+    Queue -->|Dequeue job ID| Worker[Background worker thread]
+    Worker -->|Claim and update job| DB
+    API -->|Read job status| DB
 ```
+
+
+
 
 SQLite is the source of truth for job state and result. Redis is used for queue delivery, while the conditional SQLite update ensures that only a job whose current status is 'queued' can be claimed for processing. 
 
