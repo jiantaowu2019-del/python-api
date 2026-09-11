@@ -1,11 +1,22 @@
-# Job Queue API
+# Background Job Queue and Monitoring System
 
-一个用 **FastAPI** 写的简易 Job Queue 服务，用来演示：
+A Restful background job-processing service build with FastAPI, redis, and SQlite. The application accepts jobs through an HTTP API, places their IDs in a Redis queue, and processing them asynchronously with a background worker thread.
 
-- 如何设计 RESTful API
-- 如何用 `APIRouter` 管理子路由
-- 如何用后台线程模拟「任务异步执行」
-- 如何在没有数据库的情况下，用内存结构先把系统跑起来
+The project demonstrates API design, persistent job state, queue-based background processing, retry handling, automated testing, and containerized local development.
+
+## Features
+- submit background jobs through a Rest API
+- Track job status and result
+- Filter and paginate job records
+- Process queued jobs with a Redis-backed Worker
+- Automatically retry failed jobs
+- Manually requeue completed or failed job
+- Prevent invalid duplicated job claims with conditional state transitions
+- View queue statistic and recovery actions through a monitoring dashboard
+- Persis job records in SQLite
+- Run the API and Redis services with Docker compose
+- Test API and database behavior with Pytest
+
 
 ## 技术栈
 
