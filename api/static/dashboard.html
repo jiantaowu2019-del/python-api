@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Queue Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/dashboard.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <h1>Job Queue Dashboard</h1>
+        <p>Monitor jobs, create new work, and retry failed tasks.</p>
+      </div>
+      <button id="refresh-button" type="button">Refresh</button>
+    </header>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <span>Total</span>
+        <strong id="stat-total">0</strong>
+      </article>
+      <article class="stat-card queued">
+        <span>Queued</span>
+        <strong id="stat-queued">0</strong>
+      </article>
+      <article class="stat-card processing">
+        <span>Processing</span>
+        <strong id="stat-processing">0</strong>
+      </article>
+      <article class="stat-card done">
+        <span>Done</span>
+        <strong id="stat-done">0</strong>
+      </article>
+      <article class="stat-card failed">
+        <span>Failed</span>
+        <strong id="stat-failed">0</strong>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Create Job</h2>
+      <form id="create-job-form" class="create-form">
+        <input
+          id="payload-input"
+          name="payload"
+          type="text"
+          placeholder="Example: send welcome email to user-123"
+          required
+        >
+        <input
+          id="max-retries-input"
+          name="maxRetries"
+          type="number"
+          min="0"
+          max="10"
+          value="3"
+        >
+        <button type="submit">Create</button>
+      </form>
+      <p id="form-message" class="message"></p>
+    </section>
+
+    <section class="panel">
+      <div class="section-header">
+        <h2>Recent Jobs</h2>
+        <span id="last-updated">Not loaded yet</span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Payload</th>
+              <th>Status</th>
+              <th>Attempts</th>
+              <th>Updated</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-table-body">
+            <tr>
+              <td colspan="6">Loading jobs...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

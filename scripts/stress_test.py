@@ -24,13 +24,17 @@ def deleter(seconds=3):
             jid = jobs[0]["id"]
             requests.delete(f"{BASE}/{jid}")
 
-threads = [
-    threading.Thread(target=creator),
-    threading.Thread(target=lister),
-    threading.Thread(target=deleter),
-]
+if __name__ == "__main__":
+    threads = [
+        threading.Thread(target=creator),
+        threading.Thread(target=lister),
+        threading.Thread(target=deleter),
+    ]
 
-for t in threads: t.start()
-for t in threads: t.join()
+    for t in threads:
+        t.start()
 
-print("done")
+    for t in threads:
+        t.join()
+
+    print("done")

@@ -1,10 +1,24 @@
-# Python venv
+# Python virtual environments
 .venv/
+.venv-*/
 
 # Python cache
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Editor/OS
 .vscode/
 .DS_Store
+.agents/
+.codex/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+*.db
+*.db-shm
+*.db-wal

@@ -8,7 +8,7 @@ import time
 from collections import Counter
 
 from api.db import get_conn
-from api.queue_state import job_queue  # 如果你决定保留事件驱动 worker
+from api.redis_client import enqueue # 如果你决定保留事件驱动 worker
 
 
 def now_utc_iso() -> str:
@@ -76,8 +76,8 @@ def create_job(job_in: JobCreate):
         )
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 
-    # 通知 worker：有新任务（如果你 worker 还用 Queue 驱动）
-    job_queue.put(job_id)
+    # inform worker：have a new event
+    enqueue(job_id)
 
     return row_to_job(row)
 
@@ -150,7 +150,7 @@ def update_job_status(job_id: str, update: JobUpdateStatus):
         if row is None:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        # 建议的保护规则（可选）：processing 时不允许随便改
+        # 保护规则：processing 时不允许随便改
         # if row["status"] == "processing" and update.status != "processing":
         #     raise HTTPException(status_code=409, detail="Cannot change status of a processing job")
 
@@ -193,7 +193,7 @@ def run_job(job_id: str):
             SET status='done', result=?, error=NULL, updated_at=?
             WHERE id=?
             """,
-            (f"Job finished with payload: {row['payload']}", now_utc_iso(), job_id),
+            ("Job finished with payload: {row['payload']}", now_utc_iso(), job_id),
         )
         new_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 
@@ -239,7 +239,7 @@ def requeue_job(job_id: str):
         )
         new_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 
-    job_queue.put(job_id)
+    enqueue(job_id)
     return row_to_job(new_row)
 
 

@@ -5,9 +5,7 @@ and SQLite. The application accepts jobs through an HTTP API, places
 their IDs in a Redis queue, and processes them asynchronously with a
 background worker thread.
 
-The project demonstrates API design, persistent job state, queue-based
-background processing, retry handling, automated testing, and
-containerized local development.
+The project demonstrates API design, persistent job state, queue-based background processing, retry handling, automated testing, and containerized local development.
 
 ## Features
 
@@ -24,40 +22,41 @@ containerized local development.
 - Test API and database behavior with Pytest
 
 ## Architecture
-The FastAPI application exposes the REST API and monitoring dashboard.
-When a client submit a job, the API stores the job record in SQLite and pushes only its ID to Redis. 
-A background worker thread blocks on the Redis queue, claims the corresponding SQLite record, executes the job, and updates its status and result.
 
+The FastAPI application exposes the REST API and monitoring dashboard.
+When a client submits a job, the API stores the job record in SQLite and
+pushes only its ID to Redis. A background worker thread blocks on the Redis
+queue, claims the corresponding SQLite record, executes the job, and updates
+its status and result.
 
 ```mermaid
 flowchart LR
-    Client[Client or dashboard] -->| HTTP request| API[FastAPI application]
-    API -->|store job record| DB[(SQLite)]
+    Client[Client or dashboard] -->|HTTP request| API[FastAPI application]
+    API -->|Store job record| DB[(SQLite)]
     API -->|Enqueue job ID| Queue[(Redis queue)]
     Queue -->|Dequeue job ID| Worker[Background worker thread]
     Worker -->|Claim and update job| DB
     API -->|Read job status| DB
 ```
 
-
-
-
-SQLite is the source of truth for job state and result. Redis is used for queue delivery, while the conditional SQLite update ensures that only a job whose current status is 'queued' can be claimed for processing. 
-
+SQLite is the source of truth for job state and results. Redis is used for
+queue delivery, while the conditional SQLite update ensures that only a job
+whose current status is `queued` can be claimed for processing.
 
 ## Job Lifecycle
 
-1. A client submits a job with 'POST /api/jobs'.
-2. The API creates a SQLite record with the 'queued' status
+1. A client submits a job with `POST /api/jobs`.
+2. The API creates a SQLite record with the `queued` status.
 3. The API pushes the new job ID to Redis.
-4. The worker removes the ID from Redis and conditionally changes the job status from 'queued' to 'processing'.
-5. If execution succeeds, the worker stores the result and changes the status to 'done'.
-6. If execution fails and retires remain, the worker returns the job to the 'queued' state and pushes its ID back to Redis.
-7. When no retries remain, the worker changes the status to 'failed'.
-8. A completed or failed job can be manually requeued through the API or the monitoring dashboard.
-
-
-
+4. The worker removes the ID from Redis and conditionally changes the job
+   status from `queued` to `processing`.
+5. If execution succeeds, the worker stores the result and changes the status
+   to `done`.
+6. If execution fails and retries remain, the worker returns the job to the
+   `queued` state and pushes its ID back to Redis.
+7. When no retries remain, the worker changes the status to `failed`.
+8. A completed or failed job can be manually requeued through the API or the
+   monitoring dashboard.
 
 ## Quick Start
 
@@ -88,10 +87,6 @@ docker-compose down
 
 The SQLite database is stored in the `sqlite_data` Docker volume, so job data
 persists when the containers are stopped and restarted.
-
-
-
-
 
 ### Option 2: Run Locally for Development
 
@@ -193,8 +188,33 @@ The project also includes `PATCH /api/jobs/{job_id}/status` and
 `POST /api/jobs/{job_id}/run` for local demonstration and debugging. These
 endpoints are not intended as production job-management operations.
 
+## Testing
 
+Run the automated test suite from the project root:
 
+```powershell
+python -m pytest -q
+```
 
+The current suite contains 12 tests covering:
 
+- Job creation and default state
+- Job lookup and `404` responses
+- Status filtering
+- Protection against deleting a job while it is processing
+- Manual requeue behavior, including clearing old results and errors
+- Retry-budget boundaries, including zero-retry jobs
+- Database initialization
+- Foreign-key enforcement for job events
+- Job-event recording and transaction behavior
 
+The API tests replace Redis enqueue operations and worker startup with test
+fixtures, keeping the suite deterministic and independent of a running Redis
+server.
+
+With the Docker services running, an optional concurrency script can submit,
+list, and delete jobs from multiple threads:
+
+```powershell
+python scripts/stress_test.py
+```

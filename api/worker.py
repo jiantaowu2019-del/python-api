@@ -40,6 +40,11 @@ def _execute_job_logic(payload: str):
     if "fail" in payload.lower():
         sleep(2) 
         raise RuntimeError("Simulated failure (payload contains 'fail')")
+
+
+def _can_retry(attempts: int, max_retries: int) -> bool:
+    """Return whether another attempt remains after the current failure."""
+    return attempts <= max_retries
     
 
 def worker_loop():
@@ -60,9 +65,9 @@ def worker_loop():
         try:
             _execute_job_logic(payload)
         except Exception as e:
-            # max_retries = 允许“重试次数”
-            # 总尝试上限 = 1 + max_retries
-            can_retry = attempts <= (1 + max_retries)
+            # attempts includes the current execution; max_retries counts
+            # additional executions after the initial attempt.
+            can_retry = _can_retry(attempts, max_retries)
             next_status = "queued" if can_retry else "failed"
 
             with get_conn() as conn:

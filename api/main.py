@@ -1,25 +1,40 @@
 # api/main.py
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from api.router.jobs import router as jobs_router
 from api.worker import start_worker
 from api.db import init_db
 
+# html,css,js
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+BASE_DIR = Path(__file__).resolve().parent
 
 
-app = FastAPI(title="Job Queue API")
 
 
-@app.on_event("startup")
-def on_startup():
-    #starts worker thread
-    # ensure the table exists and the schema  is up to date
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize application resources before accepting requests."""
     init_db()
-
-    #starts a background thread 
-    # the thread will fetch tasks from the job queue 
-    # Update job status (queued->running->done/failed)
-    # !( does not depend on the HTTP request)
     start_worker()
+    yield
+
+
+app = FastAPI(title="Job Queue API", lifespan=lifespan)
+
+
+
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+@app.get("/dashboard")
+def dashboard():
+    return FileResponse(BASE_DIR / "static" / "dashboard.html")
+
+
+
+
 
 
 @app.get("/health")
